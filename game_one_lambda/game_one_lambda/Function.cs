@@ -9,6 +9,8 @@ using System.Threading.Tasks;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2.DocumentModel;
+using Amazon.Runtime;
 
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.LambdaJsonSerializer))]
@@ -18,15 +20,36 @@ namespace game_one_lambda
     public class Function
     {
 
-        private static AmazonDynamoDBClient client = new AmazonDynamoDBClient();
-
+        private static AmazonDynamoDBClient dynamoClient = new AmazonDynamoDBClient();
+        private static string tableName = "game_one_connections";
 
         public APIGatewayProxyResponse FunctionHandler(APIGatewayProxyRequest request, ILambdaContext context)
         {
-            return CreateResponse("hello", 200);
+            Dictionary<string, string> requestData = ParseRequest(request);
+
+            // Create a new entry in the database
+            try
+            {
+                Table connections = Table.LoadTable(dynamoClient, tableName);
+                string id = request.RequestContext.ConnectionId;
+
+                if (id == null)
+                {
+                    return CreateResponse("Connection Id cannot be null", 400);
+                }
+
+                CreateConnection(connections, id);
+            }
+            catch (AmazonDynamoDBException e)
+            {
+                Console.WriteLine(e.Message);
+                throw;
+            }
+
+            return CreateResponse("Ok", 200);
         }
 
-        private string processRequest(string sURL)
+        private string ProcessRequest(string sURL)
         {
             Uri uUri = new Uri(sURL);
             WebRequest wrGETURL;
@@ -65,18 +88,20 @@ namespace game_one_lambda
 
         }
 
+        private async void CreateConnection(Table T, string ID)
+        {
+            Document connection = new Document();
+            connection["connectionId"] = ID;
+            await T.PutItemAsync(connection);
+        }
+
         private APIGatewayProxyResponse CreateResponse(string resp, int code)
         {
-            int statusCode = (int)HttpStatusCode.OK;
             string responseBody = resp;
-            if (code != 200)
-            {
-                statusCode = (int)HttpStatusCode.BadRequest;
-            }
 
             var response = new APIGatewayProxyResponse
             {
-                StatusCode = statusCode,
+                StatusCode = code,
                 Body = responseBody,
                 Headers = new Dictionary<string, string>
                 {
@@ -87,6 +112,22 @@ namespace game_one_lambda
             };
 
             return response;
+        }
+
+        private Dictionary<string, string> ParseRequest(APIGatewayProxyRequest request)
+        {
+            Dictionary<string, string> output = new Dictionary<string, string>();
+
+            //"{\"test\":\"body\"}" -> "test:body"
+            string bodyText = request.Body.Replace("{", "").Replace("\\", "").Replace("}", "").Replace("\"", "");
+
+            foreach (string KeyValue in bodyText.Split(","))
+            {
+                var tmp = KeyValue.Split(":");
+                output[tmp[0]] = tmp[1];
+            }
+
+            return output;
         }
     }
 
